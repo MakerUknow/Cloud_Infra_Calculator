@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud Gaming Infrastructure Calculator — Cost & Revenue Dashboard</title>
+  <meta name="description" content="Internal tool for projecting cloud gaming infrastructure costs, revenue, and profitability using CoreWeave GPU racks with dynamic provisioning.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- SIDEBAR NAV -->
+  <nav id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-icon">⚡</div>
+      <div class="brand-text">
+        <span class="brand-title">CloudCalc</span>
+        <span class="brand-sub">Infrastructure Dashboard</span>
+      </div>
+    </div>
+    <div class="nav-links">
+      <button class="nav-link active" data-tab="dashboard" id="nav-dashboard">
+        <span class="nav-icon">📊</span> Dashboard
+      </button>
+      <button class="nav-link" data-tab="config" id="nav-config">
+        <span class="nav-icon">⚙️</span> Configuration
+      </button>
+      <button class="nav-link" data-tab="financials" id="nav-financials">
+        <span class="nav-icon">💰</span> Financials
+      </button>
+      <button class="nav-link" data-tab="infra" id="nav-infra">
+        <span class="nav-icon">🖥️</span> Infrastructure
+      </button>
+      <button class="nav-link" data-tab="scenarios" id="nav-scenarios">
+        <span class="nav-icon">🔬</span> Scenarios
+      </button>
+      <button class="nav-link" data-tab="charts" id="nav-charts">
+        <span class="nav-icon">📈</span> Charts
+      </button>
+    </div>
+    <div class="sidebar-footer">
+      <div class="preset-section">
+        <label class="preset-label">Quick Presets</label>
+        <select id="scenarioPreset" class="preset-select">
+          <option value="custom">Custom</option>
+          <option value="conservative">Conservative Launch</option>
+          <option value="expected" selected>Expected (Typical)</option>
+          <option value="aggressive">Aggressive Growth</option>
+          <option value="stress">Stress Test</option>
+        </select>
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main id="main-content">
+    <!-- ============ DASHBOARD TAB ============ -->
+    <section id="tab-dashboard" class="tab-content active">
+      <div class="page-header">
+        <h1>Dashboard Overview</h1>
+        <p class="page-subtitle">UK Cloud Gaming — CoreWeave London Infrastructure</p>
+      </div>
+
+      <!-- Alert Bar -->
+      <div id="alert-bar" class="alert-bar"></div>
+
+      <!-- KPI Row -->
+      <div class="kpi-row" id="kpi-row">
+        <!-- Filled by JS -->
+      </div>
+
+      <!-- Summary Grid -->
+      <div class="dashboard-grid">
+        <div class="card card-wide" id="card-revenue-summary">
+          <h3 class="card-title">Revenue & Profit Summary</h3>
+          <div class="card-body" id="revenue-summary-body"></div>
+        </div>
+        <div class="card" id="card-cost-breakdown">
+          <h3 class="card-title">Cost Breakdown</h3>
+          <div class="card-body chart-container">
+            <canvas id="chart-cost-donut"></canvas>
+          </div>
+        </div>
+        <div class="card" id="card-infra-summary">
+          <h3 class="card-title">Infrastructure Summary</h3>
+          <div class="card-body" id="infra-summary-body"></div>
+        </div>
+        <div class="card" id="card-efficiency">
+          <h3 class="card-title">Utilization & Demand</h3>
+          <div class="card-body" id="efficiency-body"></div>
+        </div>
+      </div>
+
+      <!-- Calculation Logic -->
+      <div class="card card-full logic-card">
+        <h3 class="card-title">Calculation Model</h3>
+        <div class="logic-content" id="logic-content"></div>
+      </div>
+    </section>
+
+    <!-- ============ CONFIGURATION TAB ============ -->
+    <section id="tab-config" class="tab-content">
+      <div class="page-header">
+        <h1>Configuration</h1>
+        <p class="page-subtitle">Adjust all model parameters</p>
+      </div>
+
+      <div class="config-grid">
+        <!-- Demand -->
+        <div class="config-section">
+          <h3 class="section-title">📋 Demand & Pricing</h3>
+          <div class="input-group">
+            <div class="input-row">
+              <label for="cfg-users">Monthly Subscribers</label>
+              <input type="number" id="cfg-users" value="1000" min="1">
+              <span class="input-hint">Recurring paying users</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-price">Price per User (£)</label>
+              <input type="number" id="cfg-price" value="50" min="1" step="1">
+              <span class="input-hint">Monthly subscription in GBP</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-gbp-usd">GBP → USD Rate</label>
+              <input type="number" id="cfg-gbp-usd" value="1.26" min="0.1" step="0.01">
+              <span class="input-hint">Conversion rate for cost calculations</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-hours-allowance">Monthly Hours Allowance</label>
+              <input type="number" id="cfg-hours-allowance" value="100" min="1">
+              <span class="input-hint">Hours per user per month</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-avg-usage">Avg Usage % of Allowance</label>
+              <input type="number" id="cfg-avg-usage" value="50" min="1" max="100" step="1">
+              <span class="input-hint">How much of the cap users actually use — scales metered GPU rack-hours vs a 50% baseline (with a throughput floor)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Concurrency -->
+        <div class="config-section">
+          <h3 class="section-title">👥 Concurrency Model</h3>
+          <div class="input-group">
+            <div class="input-row">
+              <label for="cfg-peak-pct">Peak Concurrency %</label>
+              <input type="number" id="cfg-peak-pct" value="25" min="1" max="100" step="1">
+              <span class="input-hint">% of subscribers online during peak weekday evening</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-offpeak-pct">Off-Peak Concurrency %</label>
+              <input type="number" id="cfg-offpeak-pct" value="8" min="0" max="100" step="1">
+              <span class="input-hint">% of subscribers online during quiet hours</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-weekend-mult">Weekend Peak Multiplier</label>
+              <input type="number" id="cfg-weekend-mult" value="1.3" min="1" max="3" step="0.1">
+              <span class="input-hint">Peak concurrency multiplied by this on weekends</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- GPU Tiers — Per-Tier Config -->
+        <div class="config-section">
+          <h3 class="section-title">🎮 GPU Configuration</h3>
+          <div class="input-group">
+            <div class="input-row">
+              <label for="cfg-gpu-tier">Primary GPU Tier</label>
+              <select id="cfg-gpu-tier" class="styled-select">
+                <option value="l40s">NVIDIA L40S ($18.00/rack-hr on-demand)</option>
+                <option value="rtx6000">RTX PRO 6000 Blackwell ($20.00/rack-hr on-demand)</option>
+                <option value="mixed">Mixed Fleet (70/30 L40S/RTX6000)</option>
+              </select>
+              <span class="input-hint">Select GPU tier for pricing and spec calculations</span>
+            </div>
+            <div style="padding:8px 0 4px;color:var(--text-secondary);font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">L40S Configuration</div>
+            <div class="input-row">
+              <label for="cfg-l40s-gpus-per-rack">GPUs per Rack (L40S)</label>
+              <input type="number" id="cfg-l40s-gpus-per-rack" value="8" min="1" max="16">
+              <span class="input-hint">Physical GPU count per L40S rack (48GB VRAM each)</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-l40s-users-per-gpu">MIG Slicing (L40S)</label>
+              <input type="number" id="cfg-l40s-users-per-gpu" value="2" min="1" max="8" step="1">
+              <span class="input-hint">Users per GPU: 1=full, 2=half (24GB), 4=quarter (12GB)</span>
+            </div>
+            <div style="padding:8px 0 4px;color:var(--text-secondary);font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">RTX PRO 6000 Configuration</div>
+            <div class="input-row">
+              <label for="cfg-rtx6000-gpus-per-rack">GPUs per Rack (RTX6000)</label>
+              <input type="number" id="cfg-rtx6000-gpus-per-rack" value="8" min="1" max="16">
+              <span class="input-hint">Physical GPU count per RTX6000 rack (96GB VRAM each)</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-rtx6000-users-per-gpu">MIG Slicing (RTX6000)</label>
+              <input type="number" id="cfg-rtx6000-users-per-gpu" value="4" min="1" max="8" step="1">
+              <span class="input-hint">Users per GPU: 2=half (48GB), 4=quarter (24GB), 8=eighth</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pricing & Contracts -->
+        <div class="config-section">
+          <h3 class="section-title">💵 CoreWeave Contracts</h3>
+          <div class="input-group">
+            <div class="input-row">
+              <label for="cfg-contract-discount">Contract Discount %</label>
+              <input type="number" id="cfg-contract-discount" value="60" min="0" max="95" step="5">
+              <span class="input-hint">Long-term committed usage discount (up to 60%)</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-idle-discount">Idle Capacity Discount %</label>
+              <input type="number" id="cfg-idle-discount" value="20" min="0" max="50" step="5">
+              <span class="input-hint">Extra discount from monetizing provider idle capacity</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-burst-multiplier">Burst / On-Demand Premium (×)</label>
+              <input type="number" id="cfg-burst-multiplier" value="1.5" min="1" max="5" step="0.1">
+              <span class="input-hint">Multiplier over the fully-blended committed rack-hour rate (after contract + idle discounts) for burst hours. e.g. 1.5× means burst costs 50% more than committed.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Provisioning Strategy -->
+        <div class="config-section">
+          <h3 class="section-title">📐 Provisioning Strategy</h3>
+          <div class="input-group">
+            <div class="input-row">
+              <label for="cfg-peak-coverage">Peak Coverage by Committed Capacity %</label>
+              <input type="number" id="cfg-peak-coverage" value="95" min="50" max="100" step="1">
+              <span class="input-hint">% of absolute-peak rack demand absorbed by the negotiated commitment. 100% = no burst; well-negotiated cloud-gaming contracts sit at 90–100% so burst covers only unforecasted spikes.</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-intra-window-util">Intra-Window Utilisation %</label>
+              <input type="number" id="cfg-intra-window-util" value="70" min="30" max="100" step="5">
+              <span class="input-hint">Fraction of each time-window for which the peak-sized fleet is actually billed. Models K8s/CoreWeave dynamic scale-down during ramp & taper inside a window. 100% = no intra-window scaling (billed at window peak all day); 70% ≈ typical autoscaled cloud-gaming workload.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Other Costs -->
+        <div class="config-section">
+          <h3 class="section-title">🏗️ Other Costs</h3>
+          <div class="input-group">
+            <div class="input-row">
+              <label for="cfg-storage-gb">Storage per User (GB)</label>
+              <input type="number" id="cfg-storage-gb" value="150" min="10" max="1000" step="10">
+              <span class="input-hint">VM disk + game data per user</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-storage-rate">Storage Rate ($/GB/mo)</label>
+              <input type="number" id="cfg-storage-rate" value="0.05" min="0.01" max="0.5" step="0.01">
+              <span class="input-hint">CoreWeave distributed file storage rate</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-windows-cost">Windows License ($/user/mo)</label>
+              <input type="number" id="cfg-windows-cost" value="7" min="0" max="30" step="0.5">
+              <span class="input-hint">BYOL Windows 10/11/Server licensing</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-public-ips">Public IP Addresses</label>
+              <input type="number" id="cfg-public-ips" value="50" min="1" max="500">
+              <span class="input-hint">$4/IP/month (NAT, VPC, egress are free)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Time Model -->
+        <div class="config-section">
+          <h3 class="section-title">🕐 Time Distribution</h3>
+          <div class="input-group">
+            <div class="input-row">
+              <label for="cfg-peak-hours-weekday">Peak Hours per Weekday</label>
+              <input type="number" id="cfg-peak-hours-weekday" value="5" min="1" max="12" step="1">
+              <span class="input-hint">Evening peak window (e.g. 6pm–11pm)</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-peak-hours-weekend">Peak Hours per Weekend Day</label>
+              <input type="number" id="cfg-peak-hours-weekend" value="10" min="1" max="18" step="1">
+              <span class="input-hint">Extended peak on weekends</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ FINANCIALS TAB ============ -->
+    <section id="tab-financials" class="tab-content">
+      <div class="page-header">
+        <h1>Financial Analysis</h1>
+        <p class="page-subtitle">Detailed revenue, cost, and profit projections</p>
+      </div>
+      <div id="financials-content"></div>
+    </section>
+
+    <!-- ============ INFRASTRUCTURE TAB ============ -->
+    <section id="tab-infra" class="tab-content">
+      <div class="page-header">
+        <h1>Infrastructure Detail</h1>
+        <p class="page-subtitle">GPU racks, provisioning, and capacity planning</p>
+      </div>
+      <div id="infra-content"></div>
+    </section>
+
+    <!-- ============ SCENARIOS TAB ============ -->
+    <section id="tab-scenarios" class="tab-content">
+      <div class="page-header">
+        <h1>Scenario Comparison</h1>
+        <p class="page-subtitle">Optimistic / Expected / Worst-case side-by-side</p>
+      </div>
+      <div id="scenarios-content"></div>
+    </section>
+
+    <!-- ============ CHARTS TAB ============ -->
+    <section id="tab-charts" class="tab-content">
+      <div class="page-header">
+        <h1>Visual Analytics</h1>
+        <p class="page-subtitle">Interactive charts for cost modelling and sensitivity</p>
+      </div>
+      <div class="charts-grid" id="charts-content">
+        <div class="card chart-card">
+          <h3 class="card-title">Profit vs User Count</h3>
+          <div class="chart-container-lg"><canvas id="chart-profit-users"></canvas></div>
+        </div>
+        <div class="card chart-card">
+          <h3 class="card-title">Margin Sensitivity to Concurrency</h3>
+          <div class="chart-container-lg"><canvas id="chart-margin-concurrency"></canvas></div>
+        </div>
+        <div class="card chart-card">
+          <h3 class="card-title">Cost Per User Hour vs MIG Slicing</h3>
+          <div class="chart-container-lg"><canvas id="chart-cost-slicing"></canvas></div>
+        </div>
+        <div class="card chart-card">
+          <h3 class="card-title">Revenue vs Costs — Scale Projection</h3>
+          <div class="chart-container-lg"><canvas id="chart-scale-projection"></canvas></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
