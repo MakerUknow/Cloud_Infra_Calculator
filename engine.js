@@ -9,18 +9,17 @@
       actual concurrent demand per time window. You pay 
       rack-hours only for racks that are actively serving users.
    
-   2. CONCURRENCY + USAGE (METERED HOURS): Concurrency sizes
-      peak/off-peak fleets per window. Aggregate playtime
-      (allowance × avg usage %) scales billed GPU rack-hours
-      vs a baseline so longer sessions consume more infra time
-      even at unchanged peak concurrency. A throughput floor
-      ensures rack-hours never fall below what is needed to
-      deliver total user-hours at MIG capacity.
+   2. CONSERVED USER-HOURS: Subscribers × allowance ×
+      realised usage determines total delivered user-hours.
+      A normalized demand shape allocates those user-hours
+      across the month, and concurrency is derived from the
+      same allocation rather than injected separately.
    
    3. TIME-WINDOWED MODEL: The month is divided into 
       distinct time windows (weekday peak, weekday off-peak, 
-      weekend peak, weekend off-peak) each with their own 
-      concurrency patterns.
+      weekend peak, weekend off-peak). Each window gets a
+      share of monthly playtime, from which average and peak
+      concurrency are derived.
    
    4. GPU SLICING: Users per rack = GPUs × slices per GPU.
       This directly constrains concurrency capacity.
@@ -64,11 +63,8 @@ const Engine = {
   /* Fleet-mix weights for the "Mixed Fleet" tier selection */
   MIX_WEIGHTS: { l40s: 0.70, rtx6000: 0.30 },
 
-  /* Concurrency constants — tunable but not exposed as UI */
-  CONCURRENCY_CONSTANTS: {
-    // Slight uplift on weekend off-peak hours vs weekday off-peak
-    weekendOffpeakUplift: 1.10,
-    // Weeks per month average
+  /* Calendar constants */
+  CALENDAR_CONSTANTS: {
     weeksPerMonth: 4.345,
   },
 
@@ -89,15 +85,16 @@ const Engine = {
     intraWindowUtilPct: 70,
   },
 
-  /* Usage → GPU-time scaling (see header §2). Tunable; not duplicated inline. */
-  USAGE_MODEL: {
-    // Rack-hour stack is unity-scaled when Avg Usage % of allowance equals
-    // this fraction (e.g. 0.5 = 50%). Higher/lower usage multiplies billed
-    // window rack-hours to reflect metered playtime vs this baseline.
-    baselineAvgUsageRatio: 0.5,
-    // Conservative lower bound on slice delivery efficiency for the global
-    // throughput floor only: required rack-hours ≥ U ÷ (usersPerRack × η).
-    throughputDeliveryEfficiency: 1,
+  /* Normalized demand-shape defaults */
+  DEMAND_SHAPE_DEFAULTS: {
+    // Share of total monthly playtime that lands on weekends.
+    weekendSharePct: 40,
+    // Intensity of peak hours relative to off-peak within weekdays/weekends.
+    weekdayPeakIntensity: 3.0,
+    weekendPeakIntensity: 3.8,
+    // Peak concurrent users inside a window relative to the average concurrent
+    // users across that window.
+    windowPeakOverAvgFactor: 2.0,
   },
 
   /* ===== Read all config inputs ===== */
@@ -122,10 +119,11 @@ const Engine = {
       // Divide by 100 to convert UI percentage (0-100) to ratio (0-1)
       avgUsagePct: val('cfg-avg-usage', 50) / 100,
 
-      // Concurrency
-      peakConcurrencyPct: val('cfg-peak-pct', 25) / 100,
-      offpeakConcurrencyPct: val('cfg-offpeak-pct', 8) / 100,
-      weekendMultiplier: val('cfg-weekend-mult', 1.3),
+      // Demand Shape
+      weekendSharePct: val('cfg-weekend-share', this.DEMAND_SHAPE_DEFAULTS.weekendSharePct) / 100,
+      weekdayPeakIntensity: val('cfg-weekday-peak-intensity', this.DEMAND_SHAPE_DEFAULTS.weekdayPeakIntensity),
+      weekendPeakIntensity: val('cfg-weekend-peak-intensity', this.DEMAND_SHAPE_DEFAULTS.weekendPeakIntensity),
+      windowPeakOverAvgFactor: val('cfg-window-peak-factor', this.DEMAND_SHAPE_DEFAULTS.windowPeakOverAvgFactor),
 
       // GPU — per-tier configuration
       gpuTier: sel('cfg-gpu-tier', 'l40s'),
@@ -194,7 +192,7 @@ const Engine = {
     r.totalUsageHours = cfg.users * r.avgHoursPerUser;
     
     // Total hours in a month (~730)
-    const weeksPerMonth = this.CONCURRENCY_CONSTANTS.weeksPerMonth;
+    const weeksPerMonth = this.CALENDAR_CONSTANTS.weeksPerMonth;
     r.totalMonthHours = 24 * 7 * weeksPerMonth;
 
     // ── Time Windows ──
@@ -205,23 +203,53 @@ const Engine = {
     r.peakHoursWeekendTotal = weekendDaysPerMonth * cfg.peakHoursWeekend;
     r.offpeakHoursWeekendTotal = weekendDaysPerMonth * (24 - cfg.peakHoursWeekend);
 
-    // ── Peak Users per Window ──
-    r.peakUsersWeekday = Math.ceil(cfg.users * cfg.peakConcurrencyPct);
-    r.peakUsersWeekend = Math.ceil(cfg.users * cfg.peakConcurrencyPct * cfg.weekendMultiplier);
-    r.offpeakUsersWeekday = Math.ceil(cfg.users * cfg.offpeakConcurrencyPct);
-    r.offpeakUsersWeekend = Math.ceil(cfg.users * cfg.offpeakConcurrencyPct * this.CONCURRENCY_CONSTANTS.weekendOffpeakUplift);
-    r.absolutePeakUsers = Math.max(r.peakUsersWeekday, r.peakUsersWeekend);
+    // ── Demand Shape → Window User-Hours / Concurrency ──
+    // Monthly user-hours are the conserved work quantity. Demand-shape knobs
+    // determine how that work is distributed across the four non-overlapping
+    // windows; concurrency and rack demand are derived from that allocation.
+    const weekendShare = Math.min(Math.max(cfg.weekendSharePct, 0.05), 0.95);
+    const weekdayShare = 1 - weekendShare;
 
-    // ── Racks Needed per Window (Provisioned to PEAK of the window) ──
+    const weekdayPeakLoad = r.peakHoursWeekdayTotal * cfg.weekdayPeakIntensity;
+    const weekdayOffpeakLoad = r.offpeakHoursWeekdayTotal;
+    const weekendPeakLoad = r.peakHoursWeekendTotal * cfg.weekendPeakIntensity;
+    const weekendOffpeakLoad = r.offpeakHoursWeekendTotal;
+
+    const weekdayLoadTotal = weekdayPeakLoad + weekdayOffpeakLoad;
+    const weekendLoadTotal = weekendPeakLoad + weekendOffpeakLoad;
+
+    r.windowShares = {
+      weekdayPeak: weekdayShare * (weekdayPeakLoad / Math.max(weekdayLoadTotal, 1e-9)),
+      weekdayOffpeak: weekdayShare * (weekdayOffpeakLoad / Math.max(weekdayLoadTotal, 1e-9)),
+      weekendPeak: weekendShare * (weekendPeakLoad / Math.max(weekendLoadTotal, 1e-9)),
+      weekendOffpeak: weekendShare * (weekendOffpeakLoad / Math.max(weekendLoadTotal, 1e-9)),
+    };
+
+    r.userHoursWdPeak = r.totalUsageHours * r.windowShares.weekdayPeak;
+    r.userHoursWdOff = r.totalUsageHours * r.windowShares.weekdayOffpeak;
+    r.userHoursWePeak = r.totalUsageHours * r.windowShares.weekendPeak;
+    r.userHoursWeOff = r.totalUsageHours * r.windowShares.weekendOffpeak;
+
+    r.avgConcurrentWdPeak = r.userHoursWdPeak / Math.max(r.peakHoursWeekdayTotal, 1);
+    r.avgConcurrentWdOff = r.userHoursWdOff / Math.max(r.offpeakHoursWeekdayTotal, 1);
+    r.avgConcurrentWePeak = r.userHoursWePeak / Math.max(r.peakHoursWeekendTotal, 1);
+    r.avgConcurrentWeOff = r.userHoursWeOff / Math.max(r.offpeakHoursWeekendTotal, 1);
+    r.avgConcurrentOverall = r.totalUsageHours / r.totalMonthHours;
+
+    r.peakUsersWeekday = Math.min(cfg.users, Math.ceil(r.avgConcurrentWdPeak * cfg.windowPeakOverAvgFactor));
+    r.offpeakUsersWeekday = Math.min(cfg.users, Math.ceil(r.avgConcurrentWdOff * cfg.windowPeakOverAvgFactor));
+    r.peakUsersWeekend = Math.min(cfg.users, Math.ceil(r.avgConcurrentWePeak * cfg.windowPeakOverAvgFactor));
+    r.offpeakUsersWeekend = Math.min(cfg.users, Math.ceil(r.avgConcurrentWeOff * cfg.windowPeakOverAvgFactor));
+    r.absolutePeakUsers = Math.max(r.peakUsersWeekday, r.offpeakUsersWeekday, r.peakUsersWeekend, r.offpeakUsersWeekend);
+
+    // ── Racks Needed per Window (Provisioned to derived peak of the window) ──
     r.racksWeekdayPeak = Math.ceil(r.peakUsersWeekday / r.usersPerRack);
     r.racksWeekendPeak = Math.ceil(r.peakUsersWeekend / r.usersPerRack);
     r.racksWeekdayOffpeak = Math.ceil(r.offpeakUsersWeekday / r.usersPerRack);
     r.racksWeekendOffpeak = Math.ceil(r.offpeakUsersWeekend / r.usersPerRack);
-    r.maxRacksRaw = Math.max(r.racksWeekdayPeak, r.racksWeekendPeak);
+    r.maxRacksRaw = Math.max(r.racksWeekdayPeak, r.racksWeekendPeak, r.racksWeekdayOffpeak, r.racksWeekendOffpeak);
 
     // ── Provisioning Strategy ──
-    // Reference metric for sizing descriptions (not used as commit baseline)
-    r.avgConcurrentOverall = r.totalUsageHours / r.totalMonthHours;
 
     // Committed baseline = percentage of ABSOLUTE PEAK rack demand covered by
     // the negotiated commitment. In a well-structured cloud-gaming contract the
@@ -254,10 +282,16 @@ const Engine = {
     // peakRacks × duration × intraWindowUtilPct. Committed vs burst split
     // is applied after scaling (both types scale dynamically).
     const util = cfg.intraWindowUtilPct;
-    const calcWindowHours = (racks, duration) => {
+    const calcWindowHours = (key, label, share, userHours, avgConcurrent, peakConcurrent, racks, duration) => {
       const committedRacksInWindow = Math.min(racks, r.committedRacks);
       const burstRacksInWindow = Math.max(0, racks - r.committedRacks);
       return {
+        key,
+        label,
+        share,
+        userHours,
+        avgConcurrent,
+        peakConcurrent,
         peakRacks: racks,
         duration,
         committedRacksInWindow,
@@ -268,58 +302,65 @@ const Engine = {
       };
     };
 
-    const wp = calcWindowHours(r.racksWeekdayPeak, r.peakHoursWeekdayTotal);
-    const wo = calcWindowHours(r.racksWeekdayOffpeak, r.offpeakHoursWeekdayTotal);
-    const ep = calcWindowHours(r.racksWeekendPeak, r.peakHoursWeekendTotal);
-    const eo = calcWindowHours(r.racksWeekendOffpeak, r.offpeakHoursWeekendTotal);
+    const wp = calcWindowHours(
+      'weekdayPeak',
+      'Weekday Peak',
+      r.windowShares.weekdayPeak,
+      r.userHoursWdPeak,
+      r.avgConcurrentWdPeak,
+      r.peakUsersWeekday,
+      r.racksWeekdayPeak,
+      r.peakHoursWeekdayTotal
+    );
+    const wo = calcWindowHours(
+      'weekdayOffpeak',
+      'Weekday Off-Peak',
+      r.windowShares.weekdayOffpeak,
+      r.userHoursWdOff,
+      r.avgConcurrentWdOff,
+      r.offpeakUsersWeekday,
+      r.racksWeekdayOffpeak,
+      r.offpeakHoursWeekdayTotal
+    );
+    const ep = calcWindowHours(
+      'weekendPeak',
+      'Weekend Peak',
+      r.windowShares.weekendPeak,
+      r.userHoursWePeak,
+      r.avgConcurrentWePeak,
+      r.peakUsersWeekend,
+      r.racksWeekendPeak,
+      r.peakHoursWeekendTotal
+    );
+    const eo = calcWindowHours(
+      'weekendOffpeak',
+      'Weekend Off-Peak',
+      r.windowShares.weekendOffpeak,
+      r.userHoursWeOff,
+      r.avgConcurrentWeOff,
+      r.offpeakUsersWeekend,
+      r.racksWeekendOffpeak,
+      r.offpeakHoursWeekendTotal
+    );
 
-    // Scale window-derived rack-hours by how much of the allowance subscribers
-    // actually use vs the model baseline (metered GPU-time; see USAGE_MODEL).
-    const usageIntensityScale =
-      cfg.avgUsagePct / this.USAGE_MODEL.baselineAvgUsageRatio;
-    const scaleWindow = (w) => ({
-      peakRacks: w.peakRacks,
-      duration: w.duration,
-      committedRacksInWindow: w.committedRacksInWindow,
-      burstRacksInWindow: w.burstRacksInWindow,
-      committed: w.committed * usageIntensityScale,
-      burst: w.burst * usageIntensityScale,
-      billedRackHours: w.billedRackHours * usageIntensityScale,
-    });
-
-    r.usageIntensityScale = usageIntensityScale;
     r.windows = {
-      weekdayPeak: scaleWindow(wp),
-      weekdayOffpeak: scaleWindow(wo),
-      weekendPeak: scaleWindow(ep),
-      weekendOffpeak: scaleWindow(eo),
+      weekdayPeak: wp,
+      weekdayOffpeak: wo,
+      weekendPeak: ep,
+      weekendOffpeak: eo,
     };
 
-    const swp = r.windows.weekdayPeak;
-    const swo = r.windows.weekdayOffpeak;
-    const sep = r.windows.weekendPeak;
-    const seo = r.windows.weekendOffpeak;
-
-    r.committedRackHours = swp.committed + swo.committed + sep.committed + seo.committed;
-    r.burstRackHours = swp.burst + swo.burst + sep.burst + seo.burst;
+    r.committedRackHours = wp.committed + wo.committed + ep.committed + eo.committed;
+    r.burstRackHours = wp.burst + wo.burst + ep.burst + eo.burst;
     r.totalRackHours = r.committedRackHours + r.burstRackHours;
 
-    // Throughput floor: cannot deliver more user-hours than R×P (per billed rack-hour)
-    // without additional rack-time; η accounts for non-ideal scheduling/headroom.
-    const eta = this.USAGE_MODEL.throughputDeliveryEfficiency;
-    r.usageThroughputFloorRackHours =
-      r.totalUsageHours / Math.max(r.usersPerRack * eta, 1e-9);
     r.rackHoursFromWindows = r.totalRackHours;
-    r.rackHoursUsageShortfall = Math.max(0, r.usageThroughputFloorRackHours - r.rackHoursFromWindows);
-    if (r.rackHoursUsageShortfall > 0) {
-      r.committedRackHours += r.rackHoursUsageShortfall;
-      r.totalRackHours += r.rackHoursUsageShortfall;
-    }
+    r.rackHoursUsageShortfall = 0;
 
-    r.rackHoursWeekdayPeak = swp.billedRackHours;
-    r.rackHoursWeekdayOffpeak = swo.billedRackHours;
-    r.rackHoursWeekendPeak = sep.billedRackHours;
-    r.rackHoursWeekendOffpeak = seo.billedRackHours;
+    r.rackHoursWeekdayPeak = wp.billedRackHours;
+    r.rackHoursWeekdayOffpeak = wo.billedRackHours;
+    r.rackHoursWeekendPeak = ep.billedRackHours;
+    r.rackHoursWeekendOffpeak = eo.billedRackHours;
 
     // Avg racks inside each window reflects the effective fleet size after
     // intra-window dynamic scaling (peak racks × utilisation fraction).
@@ -377,21 +418,6 @@ const Engine = {
     r.profitPerUser = r.priceUSD - marginalCostPerUser;
     r.breakEvenUsers = r.profitPerUser > 0 ? Math.ceil(r.totalIPCost / r.profitPerUser) : Infinity;
 
-    // Usage distribution (for UI table only)
-    const totalWeights = (r.peakUsersWeekday * r.peakHoursWeekdayTotal) + (r.offpeakUsersWeekday * r.offpeakHoursWeekdayTotal) +
-                         (r.peakUsersWeekend * r.peakHoursWeekendTotal) + (r.offpeakUsersWeekend * r.offpeakHoursWeekendTotal);
-    r.userHoursWdPeak = r.totalUsageHours * (r.peakUsersWeekday * r.peakHoursWeekdayTotal) / totalWeights;
-    r.userHoursWdOff = r.totalUsageHours * (r.offpeakUsersWeekday * r.offpeakHoursWeekdayTotal) / totalWeights;
-    r.userHoursWePeak = r.totalUsageHours * (r.peakUsersWeekend * r.peakHoursWeekendTotal) / totalWeights;
-    r.userHoursWeOff = r.totalUsageHours * (r.offpeakUsersWeekend * r.offpeakHoursWeekendTotal) / totalWeights;
-
-    r.avgConcurrentWdPeak = r.userHoursWdPeak / (r.peakHoursWeekdayTotal || 1);
-    r.avgConcurrentWdOff = r.userHoursWdOff / (r.offpeakHoursWeekdayTotal || 1);
-    r.avgConcurrentWePeak = r.userHoursWePeak / (r.peakHoursWeekendTotal || 1);
-    r.avgConcurrentWeOff = r.userHoursWeOff / (r.offpeakHoursWeekendTotal || 1);
-
-
-    
     r.config = cfg;
     return r;
   },
@@ -402,8 +428,10 @@ const Engine = {
     
     const optimistic = { ...base,
       avgUsagePct: 0.40,
-      peakConcurrencyPct: 0.20,
-      offpeakConcurrencyPct: 0.06,
+      weekendSharePct: 0.35,
+      weekdayPeakIntensity: 2.5,
+      weekendPeakIntensity: 3.0,
+      windowPeakOverAvgFactor: 1.6,
       contractDiscount: 0.65,
       idleDiscount: 0.25,
       burstMultiplier: 1.3,
@@ -417,9 +445,10 @@ const Engine = {
 
     const pessimistic = { ...base,
       avgUsagePct: 0.70,
-      peakConcurrencyPct: 0.40,
-      offpeakConcurrencyPct: 0.15,
-      weekendMultiplier: 1.6,
+      weekendSharePct: 0.45,
+      weekdayPeakIntensity: 3.4,
+      weekendPeakIntensity: 4.2,
+      windowPeakOverAvgFactor: 2.4,
       contractDiscount: 0.50,
       idleDiscount: 0.10,
       burstMultiplier: 2.0,
@@ -447,12 +476,12 @@ const Engine = {
     return data;
   },
 
-  sensitivityMarginVsConcurrency(cfg) {
+  sensitivityMarginVsPeakFactor(cfg) {
     const data = [];
-    for (let p = 0.05; p <= 0.80; p += 0.05) {
-      const c = { ...cfg, peakConcurrencyPct: p };
+    for (let p = 1.2; p <= 3.0; p += 0.2) {
+      const c = { ...cfg, windowPeakOverAvgFactor: Number(p.toFixed(1)) };
       const r = this.calculate(c);
-      data.push({ concurrency: (p * 100).toFixed(0), margin: r.grossMargin, profit: r.monthlyProfit });
+      data.push({ peakFactor: Number(p.toFixed(1)), margin: r.grossMargin, profit: r.monthlyProfit });
     }
     return data;
   },
@@ -468,12 +497,17 @@ const Engine = {
     return data;
   },
 
-  sensitivityScaleProjection(cfg) {
+  sensitivityBurstVsCoverage(cfg) {
     const data = [];
-    for (let u = 500; u <= 10000; u += 500) {
-      const c = { ...cfg, users: u };
+    for (let p = 0.60; p <= 1.00; p += 0.05) {
+      const c = { ...cfg, peakCoveragePct: Number(p.toFixed(2)) };
       const r = this.calculate(c);
-      data.push({ users: u, revenue: r.monthlyRevenue, costs: r.totalInfraCosts, margin: r.grossMargin });
+      data.push({
+        coverage: Math.round(p * 100),
+        burstShare: r.burstCostShare * 100,
+        profit: r.monthlyProfit,
+        costs: r.totalInfraCosts,
+      });
     }
     return data;
   },

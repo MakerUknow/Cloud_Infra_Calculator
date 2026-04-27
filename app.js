@@ -48,25 +48,25 @@ function initPresets() {
   const presets = {
     conservative: {
       'cfg-users': 500, 'cfg-price': 50, 'cfg-avg-usage': 40,
-      'cfg-peak-pct': 20, 'cfg-offpeak-pct': 6, 'cfg-weekend-mult': 1.2,
+      'cfg-weekend-share': 35, 'cfg-weekday-peak-intensity': 2.5, 'cfg-weekend-peak-intensity': 3.0, 'cfg-window-peak-factor': 1.6,
       'cfg-gpu-tier': 'l40s', 'cfg-l40s-users-per-gpu': 2, 'cfg-rtx6000-users-per-gpu': 4,
       'cfg-contract-discount': 55, 'cfg-idle-discount': 15, 'cfg-burst-multiplier': 1.4, 'cfg-peak-coverage': 100, 'cfg-intra-window-util': 60,
     },
     expected: {
       'cfg-users': 1000, 'cfg-price': 50, 'cfg-avg-usage': 50,
-      'cfg-peak-pct': 25, 'cfg-offpeak-pct': 8, 'cfg-weekend-mult': 1.3,
+      'cfg-weekend-share': 40, 'cfg-weekday-peak-intensity': 3.0, 'cfg-weekend-peak-intensity': 3.8, 'cfg-window-peak-factor': 2.0,
       'cfg-gpu-tier': 'l40s', 'cfg-l40s-users-per-gpu': 2, 'cfg-rtx6000-users-per-gpu': 4,
       'cfg-contract-discount': 60, 'cfg-idle-discount': 20, 'cfg-burst-multiplier': 1.5, 'cfg-peak-coverage': 95, 'cfg-intra-window-util': 70,
     },
     aggressive: {
       'cfg-users': 2500, 'cfg-price': 50, 'cfg-avg-usage': 55,
-      'cfg-peak-pct': 30, 'cfg-offpeak-pct': 10, 'cfg-weekend-mult': 1.4,
+      'cfg-weekend-share': 42, 'cfg-weekday-peak-intensity': 3.2, 'cfg-weekend-peak-intensity': 4.0, 'cfg-window-peak-factor': 2.1,
       'cfg-gpu-tier': 'mixed', 'cfg-l40s-users-per-gpu': 3, 'cfg-rtx6000-users-per-gpu': 6,
       'cfg-contract-discount': 60, 'cfg-idle-discount': 25, 'cfg-burst-multiplier': 1.4, 'cfg-peak-coverage': 90, 'cfg-intra-window-util': 65,
     },
     stress: {
       'cfg-users': 1000, 'cfg-price': 50, 'cfg-avg-usage': 70,
-      'cfg-peak-pct': 50, 'cfg-offpeak-pct': 15, 'cfg-weekend-mult': 1.6,
+      'cfg-weekend-share': 45, 'cfg-weekday-peak-intensity': 3.4, 'cfg-weekend-peak-intensity': 4.2, 'cfg-window-peak-factor': 2.4,
       'cfg-gpu-tier': 'rtx6000', 'cfg-l40s-users-per-gpu': 1, 'cfg-rtx6000-users-per-gpu': 2,
       'cfg-contract-discount': 50, 'cfg-idle-discount': 10, 'cfg-burst-multiplier': 2.0, 'cfg-peak-coverage': 80, 'cfg-intra-window-util': 85,
     },
@@ -143,7 +143,7 @@ function renderDashboard(r) {
       <div class="kpi-sub">Compute: ${fmt.usd2(r.costPerUserHourCompute)}/hr</div>
     </div>
     <div class="kpi-card" data-color="cyan">
-      <div class="kpi-label">Peak Demand ${tip(`max( Weekday Peak Users (${r.peakUsersWeekday}) , Weekend Peak Users (${r.peakUsersWeekend}) ) = ${fmt.num(r.absolutePeakUsers)}. Racks at peak = ceil(peak ÷ ${r.usersPerRack} users/rack) = ${r.maxRacksRaw}`)}</div>
+      <div class="kpi-label">Peak Demand ${tip(`Window user-hours are distributed by demand shape, then avg concurrency in each window is converted to peak concurrency using the ${r.config.windowPeakOverAvgFactor.toFixed(1)}× peak-over-average factor. Absolute peak = max(${r.peakUsersWeekday}, ${r.offpeakUsersWeekday}, ${r.peakUsersWeekend}, ${r.offpeakUsersWeekend}) = ${fmt.num(r.absolutePeakUsers)} users, requiring ${r.maxRacksRaw} racks.`)}</div>
       <div class="kpi-value neutral">${fmt.num(r.absolutePeakUsers)}</div>
       <div class="kpi-sub">${r.maxRacksRaw} racks needed at peak</div>
     </div>
@@ -255,11 +255,11 @@ function renderDashboard(r) {
       <span class="stat-value">${fmt.num1(r.avgRacksOverall)}</span>
     </div>
     <div class="stat-row">
-      <span class="stat-label">Peak Racks (weekend) ${tip(`ceil( Peak Concurrent Users (${fmt.num(r.absolutePeakUsers)}) ÷ Users per Rack (${r.usersPerRack}) ) = ${r.maxRacksRaw}`)}</span>
+      <span class="stat-label">Peak Racks Required ${tip(`Peak concurrent users (${fmt.num(r.absolutePeakUsers)}) ÷ Users per Rack (${r.usersPerRack}) = ${r.maxRacksRaw} racks after rounding up.`)}</span>
       <span class="stat-value">${r.maxRacksRaw}</span>
     </div>
     <div class="stat-row">
-      <span class="stat-label">Total Rack-Hours/mo ${tip(`Window stack (peak/off-peak) × intra-window util (${(r.config.intraWindowUtilPct*100).toFixed(0)}%), then × usage intensity (${r.usageIntensityScale.toFixed(2)}× vs ${(Engine.USAGE_MODEL.baselineAvgUsageRatio*100).toFixed(0)}% baseline). ${r.rackHoursUsageShortfall > 0 ? `Plus throughput floor +${fmt.num(Math.round(r.rackHoursUsageShortfall))} committed rack-hrs. ` : ''}Committed ${fmt.num(Math.round(r.committedRackHours))} + Burst ${fmt.num(Math.round(r.burstRackHours))} = ${fmt.num(Math.round(r.totalRackHours))}. See Infrastructure tab.`)}</span>
+      <span class="stat-label">Total Rack-Hours/mo ${tip(`For each window: Required Racks × Window Hours × Intra-Window Utilisation (${(r.config.intraWindowUtilPct*100).toFixed(0)}%). Then split into committed (${fmt.num(Math.round(r.committedRackHours))}) and burst (${fmt.num(Math.round(r.burstRackHours))}) rack-hours based on the ${r.committedRacks}-rack committed baseline. See Infrastructure tab for the full audit table.`)}</span>
       <span class="stat-value">${fmt.num(Math.round(r.totalRackHours))}</span>
     </div>
     <div class="stat-row">
@@ -289,7 +289,7 @@ function renderDashboard(r) {
     </div>
     <hr class="stat-divider">
     <div class="stat-row">
-      <span class="stat-label">Peak Concurrent Users ${tip(`Weekday: ceil(Users × Peak% (${(r.config.peakConcurrencyPct*100).toFixed(0)}%)) = ${r.peakUsersWeekday}. Weekend: ceil(Users × Peak% × WeekendMult (${r.config.weekendMultiplier}×)) = ${r.peakUsersWeekend}. Absolute peak = max = ${fmt.num(r.absolutePeakUsers)}`)}</span>
+      <span class="stat-label">Peak Concurrent Users ${tip(`Each window gets a share of total monthly user-hours from the normalized demand shape. Window peak concurrent users = ceil(window avg concurrent × ${r.config.windowPeakOverAvgFactor.toFixed(1)}×). Absolute peak = max = ${fmt.num(r.absolutePeakUsers)}`)}</span>
       <span class="stat-value">${fmt.num(r.absolutePeakUsers)}</span>
     </div>
     <div class="stat-row">
@@ -331,19 +331,17 @@ function renderDashboard(r) {
     <div class="logic-step">
       <div class="logic-num">2</div>
       <div>
-        <div class="logic-text">Committed Capacity Baseline</div>
-        <span class="logic-formula">max( ceil(peak ${r.maxRacksRaw} × coverage ${(r.config.peakCoveragePct*100).toFixed(0)}%), off-peak floor ${r.offpeakFloorRacks} ) = <b>${r.committedRacks} racks</b> @ ${fmt.usd2(r.committedRate)}/hr</span>
+        <div class="logic-text">Demand Shape to Peak Capacity</div>
+        <span class="logic-formula">Monthly user-hours are split across 4 windows, avg concurrency is derived from user-hours ÷ window-hours, then window peaks = avg × <b>${r.config.windowPeakOverAvgFactor.toFixed(1)}×</b>. Current absolute peak requires <b>${r.maxRacksRaw} racks</b>.</span>
       </div>
     </div>
     <div class="logic-step">
       <div class="logic-num">3</div>
       <div>
-        <div class="logic-text">Windowed Provisioning + Metered Usage</div>
+        <div class="logic-text">Provisioning and Billing Envelope</div>
         <div class="logic-formula">
-          Fleet sizes to each window's peak then autoscales down to ${(r.config.intraWindowUtilPct*100).toFixed(0)}% within the window (ramp/taper).
-          Billed window rack-hours × <b>${r.usageIntensityScale.toFixed(2)}×</b> usage intensity (baseline ${(Engine.USAGE_MODEL.baselineAvgUsageRatio*100).toFixed(0)}% of allowance).
-          ${r.rackHoursUsageShortfall > 0 ? `Throughput floor adds <b>${fmt.num(Math.round(r.rackHoursUsageShortfall))}</b> committed rack-hrs (user-hours ÷ users/rack). ` : ''}
-          Absolute peak = <b>${r.maxRacksRaw} racks</b>; baseline committed = <b>${r.committedRacks} racks</b>.
+          For each window: rack-hours = required racks × window hours × ${(r.config.intraWindowUtilPct*100).toFixed(0)}% intra-window utilisation.
+          Baseline committed capacity = <b>${r.committedRacks} racks</b> from ${fmt.pct(r.config.peakCoveragePct * 100)} peak coverage plus the off-peak floor of ${r.offpeakFloorRacks} racks.
           Burst (${fmt.pct(r.burstHoursShare * 100)} of rack-hrs, ${fmt.pct(r.burstCostShare * 100)} of spend) billed at <b>${fmt.usd2(r.burstRate)}/hr</b>.
         </div>
       </div>
@@ -493,48 +491,31 @@ function renderWindowTable(r) {
   const util = r.config.intraWindowUtilPct;
   const utilPctStr = (util * 100).toFixed(0) + '%';
   const rows = [
-    { key: 'weekdayPeak',    label: 'Weekday Peak',     peakUsers: r.peakUsersWeekday,    avgConcurrent: r.avgConcurrentWdPeak, userHours: r.userHoursWdPeak, w: r.windows.weekdayPeak },
-    { key: 'weekdayOffpeak', label: 'Weekday Off-Peak', peakUsers: r.offpeakUsersWeekday, avgConcurrent: r.avgConcurrentWdOff,  userHours: r.userHoursWdOff,  w: r.windows.weekdayOffpeak },
-    { key: 'weekendPeak',    label: 'Weekend Peak',     peakUsers: r.peakUsersWeekend,    avgConcurrent: r.avgConcurrentWePeak, userHours: r.userHoursWePeak, w: r.windows.weekendPeak },
-    { key: 'weekendOffpeak', label: 'Weekend Off-Peak', peakUsers: r.offpeakUsersWeekend, avgConcurrent: r.avgConcurrentWeOff,  userHours: r.userHoursWeOff,  w: r.windows.weekendOffpeak },
+    r.windows.weekdayPeak,
+    r.windows.weekdayOffpeak,
+    r.windows.weekendPeak,
+    r.windows.weekendOffpeak,
   ];
 
-  const totalWindowHours = rows.reduce((sum, x) => sum + x.w.duration, 0);
+  const totalWindowHours = rows.reduce((sum, x) => sum + x.duration, 0);
   const totalUserHours = rows.reduce((sum, x) => sum + x.userHours, 0);
-  const totalBilled = rows.reduce((sum, x) => sum + x.w.billedRackHours, 0);
-  const totalCommitted = rows.reduce((sum, x) => sum + x.w.committed, 0);
-  const totalBurst = rows.reduce((sum, x) => sum + x.w.burst, 0);
-  const sf = r.rackHoursUsageShortfall || 0;
-  const usageScaleStr = r.usageIntensityScale.toFixed(2);
-
-  const throughputRow = sf > 0 ? `
-    <tr>
-      <td>Throughput floor</td>
-      <td>—</td>
-      <td>—</td>
-      <td>—</td>
-      <td>—</td>
-      <td>${fmt.num(r.totalUsageHours)}</td>
-      <td>${fmt.num(Math.round(sf))}
-        ${tip(`Total user-hours (${fmt.num(r.totalUsageHours)}) ÷ (users/rack ${r.usersPerRack} × delivery η ${Engine.USAGE_MODEL.throughputDeliveryEfficiency}) = ${fmt.num1(r.usageThroughputFloorRackHours)} minimum rack-hrs. Window stack after usage scaling (${usageScaleStr}×) is ${fmt.num(Math.round(r.rackHoursFromWindows))}; this row is the extra committed rack-hrs needed for delivery.`)}
-      </td>
-      <td>0</td>
-      <td>${fmt.num(Math.round(sf))}</td>
-    </tr>
-  ` : '';
+  const totalBilled = rows.reduce((sum, x) => sum + x.billedRackHours, 0);
+  const totalCommitted = rows.reduce((sum, x) => sum + x.committed, 0);
+  const totalBurst = rows.reduce((sum, x) => sum + x.burst, 0);
 
   const body = rows.map(x => `
     <tr>
       <td>${x.label}</td>
-      <td>${fmt.num1(x.w.duration)}</td>
-      <td>${x.peakUsers}</td>
-      <td>${x.w.peakRacks}</td>
-      <td>${fmt.num1(x.avgConcurrent)}</td>
+      <td>${fmt.pct(x.share * 100)}</td>
+      <td>${fmt.num1(x.duration)}</td>
       <td>${fmt.num(Math.round(x.userHours))}</td>
-      <td>${fmt.num(Math.round(x.w.committed))}</td>
-      <td>${fmt.num(Math.round(x.w.burst))}</td>
-      <td>${fmt.num(Math.round(x.w.billedRackHours))}
-        ${tip(`Peak Racks (${x.w.peakRacks}) × Window Hours (${fmt.num1(x.w.duration)}) × Intra-Util (${utilPctStr}) = ${fmt.num(Math.round(x.w.billedRackHours))}. Split: committed ${fmt.num(Math.round(x.w.committed))} + burst ${fmt.num(Math.round(x.w.burst))}.`)}
+      <td>${fmt.num1(x.avgConcurrent)}</td>
+      <td>${fmt.num(x.peakConcurrent)}</td>
+      <td>${x.peakRacks}</td>
+      <td>${fmt.num(Math.round(x.committed))}</td>
+      <td>${fmt.num(Math.round(x.burst))}</td>
+      <td>${fmt.num(Math.round(x.billedRackHours))}
+        ${tip(`Window share ${fmt.pct(x.share * 100)} of total user-hours gives ${fmt.num(Math.round(x.userHours))} user-hours. Avg concurrent = ${fmt.num(Math.round(x.userHours))} ÷ ${fmt.num1(x.duration)} = ${fmt.num1(x.avgConcurrent)}. Peak concurrent = ceil(${fmt.num1(x.avgConcurrent)} × ${r.config.windowPeakOverAvgFactor.toFixed(1)}) = ${x.peakConcurrent}. Required racks = ceil(${x.peakConcurrent} ÷ ${r.usersPerRack}) = ${x.peakRacks}. Billed rack-hours = ${x.peakRacks} × ${fmt.num1(x.duration)} × ${utilPctStr} = ${fmt.num(Math.round(x.billedRackHours))}.`)}
       </td>
     </tr>
   `).join('');
@@ -548,11 +529,12 @@ function renderWindowTable(r) {
       <thead>
         <tr>
           <th>Window</th>
+          <th>Demand Share</th>
           <th>Window Hrs</th>
+          <th>User-Hrs</th>
+          <th>Avg Conc.</th>
           <th>Peak Conc.</th>
           <th>Peak Racks</th>
-          <th>Avg Conc.</th>
-          <th>User-Hrs</th>
           <th>Committed Rack-Hrs</th>
           <th>Burst Rack-Hrs</th>
           <th>Billed Rack-Hrs</th>
@@ -560,14 +542,14 @@ function renderWindowTable(r) {
       </thead>
       <tbody>
         ${body}
-        ${throughputRow}
         <tr class="total-row">
           <td>Total</td>
+          <td>${fmt.pct(rows.reduce((sum, x) => sum + x.share, 0) * 100)} ${tip(`Demand shares across the four windows must sum to 100%.`)}</td>
           <td>${fmt.num1(totalWindowHours)} ${tip(`Sum of window hours must equal total month hours (${fmt.num1(r.totalMonthHours)}). ${auditHoursMatch ? '✓ matches — no overlap/double-count.' : '⚠ mismatch!'}`)}</td>
-          <td>${r.maxRacksRaw} abs pk</td>
-          <td>—</td>
-          <td>${fmt.num1(r.avgConcurrentOverall)}</td>
           <td>${fmt.num(Math.round(totalUserHours))} ${tip(`Sum of per-window user-hours must equal total usage hours (${fmt.num(r.totalUsageHours)}). ${auditUserHoursMatch ? '✓ matches.' : '⚠ mismatch!'}`)}</td>
+          <td>${fmt.num1(r.avgConcurrentOverall)}</td>
+          <td>${fmt.num(r.absolutePeakUsers)} abs pk</td>
+          <td>${r.maxRacksRaw}</td>
           <td>${fmt.num(Math.round(r.committedRackHours))}</td>
           <td>${fmt.num(Math.round(r.burstRackHours))}</td>
           <td>${fmt.num(Math.round(r.totalRackHours))}</td>
@@ -576,15 +558,12 @@ function renderWindowTable(r) {
     </table>
     <div style="margin-top:14px;font-size:0.78rem;color:var(--text-secondary);line-height:1.55;">
       <strong style="color:var(--text-accent);">How each window is billed:</strong>
-      Rack-Hrs = Peak Racks × Window Hrs × Intra-Window Utilisation (${utilPctStr}) × <strong>usage intensity ${usageScaleStr}×</strong> (vs ${(Engine.USAGE_MODEL.baselineAvgUsageRatio*100).toFixed(0)}% allowance baseline — metered GPU-time).
-      The fleet sizes to the window's instantaneous peak, but Kubernetes / CoreWeave autoscaling spins down during ramp &amp; taper,
-      so only ${utilPctStr} of peak-sized capacity is billed across the window.
-      Committed vs Burst within each window: anything ≤ ${r.committedRacks}-rack baseline bills at ${fmt.usd2(r.committedRate)}/hr; excess bills at ${fmt.usd2(r.burstRate)}/hr.
+      Total monthly user-hours are distributed across the four windows using the normalized demand shape. Each window then derives avg concurrency from user-hours ÷ window-hours, converts that to peak concurrency using the ${r.config.windowPeakOverAvgFactor.toFixed(1)}× peak-over-average factor, and sizes racks from that peak. Billed rack-hours = required racks × window hours × intra-window utilisation (${utilPctStr}). Committed vs Burst within each window: anything ≤ ${r.committedRacks}-rack baseline bills at ${fmt.usd2(r.committedRate)}/hr; excess bills at ${fmt.usd2(r.burstRate)}/hr.
       <br><br>
       <strong style="color:var(--text-accent);">Audit:</strong>
       ${auditHoursMatch ? '✅' : '⚠️'} Window hours sum to ${fmt.num1(totalWindowHours)} (expected ${fmt.num1(r.totalMonthHours)}).
       ${auditUserHoursMatch ? '✅' : '⚠️'} User-hours sum to ${fmt.num(Math.round(totalUserHours))} (expected ${fmt.num(r.totalUsageHours)}).
-      No window overlaps: weekday (24−${r.config.peakHoursWeekday} off-peak + ${r.config.peakHoursWeekday} peak) × 5 days + weekend (24−${r.config.peakHoursWeekend} + ${r.config.peakHoursWeekend}) × 2 days per week × ${Engine.CONCURRENCY_CONSTANTS.weeksPerMonth} weeks.
+      No window overlaps: weekday (24−${r.config.peakHoursWeekday} off-peak + ${r.config.peakHoursWeekday} peak) × 5 days + weekend (24−${r.config.peakHoursWeekend} + ${r.config.peakHoursWeekend}) × 2 days per week × ${Engine.CALENDAR_CONSTANTS.weeksPerMonth} weeks.
     </div>
   `;
 }
@@ -644,14 +623,14 @@ function renderInfra(r) {
 
       <div class="card">
         <h3 class="card-title">Dynamic Provisioning</h3>
-        <div class="stat-row"><span class="stat-label">Peak Racks Needed ${tip(`ceil( Peak Concurrent Users (${fmt.num(r.absolutePeakUsers)}) ÷ Users/Rack (${r.usersPerRack}) ) = ${r.maxRacksRaw}`)}</span><span class="stat-value">${r.maxRacksRaw}</span></div>
+        <div class="stat-row"><span class="stat-label">Peak Racks Needed ${tip(`Absolute peak concurrent users (${fmt.num(r.absolutePeakUsers)}) ÷ Users/Rack (${r.usersPerRack}) = ${r.maxRacksRaw} racks after rounding up.`)}</span><span class="stat-value">${r.maxRacksRaw}</span></div>
         <div class="stat-row"><span class="stat-label">Committed Baseline ${tip(`max( ceil( Peak Racks (${r.maxRacksRaw}) × Coverage (${(r.config.peakCoveragePct*100).toFixed(0)}%) ) = ${r.peakCoverageRacks}, Off-Peak Floor = ${r.offpeakFloorRacks} ) = ${r.committedRacks} racks`)}</span><span class="stat-value highlight">${r.committedRacks} racks</span></div>
         <div class="stat-row"><span class="stat-label">Avg Active Racks ${tip(`Total Rack-Hours (${fmt.num(Math.round(r.totalRackHours))}) ÷ Total Month Hours (${fmt.num1(r.totalMonthHours)}) = ${fmt.num1(r.avgRacksOverall)}`)}</span><span class="stat-value">${fmt.num1(r.avgRacksOverall)}</span></div>
         <div class="stat-row"><span class="stat-label">Dynamic Range</span><span class="stat-value">${fmt.num1(Math.min(r.avgRacksWdOff, r.avgRacksWeOff))}–${r.maxRacksRaw} racks</span></div>
         <hr class="stat-divider">
-        <div class="stat-row"><span class="stat-label">Committed Rack-Hours ${tip(`Sum of min(rackInWindow, ${r.committedRacks}) × windowDuration across all 4 windows = ${fmt.num(Math.round(r.committedRackHours))}`)}</span><span class="stat-value">${fmt.num(Math.round(r.committedRackHours))}</span></div>
-        <div class="stat-row"><span class="stat-label">Burst Rack-Hours ${tip(`Sum of max(0, rackInWindow − ${r.committedRacks}) × windowDuration = ${fmt.num(Math.round(r.burstRackHours))} (${fmt.pct(r.burstHoursShare*100)} of total)`)}</span><span class="stat-value ${r.burstHoursShare > 0.15 ? 'warning' : ''}">${fmt.num(Math.round(r.burstRackHours))}</span></div>
-        <div class="stat-row"><span class="stat-label">Total Rack-Hours/mo</span><span class="stat-value highlight">${fmt.num(Math.round(r.totalRackHours))}</span></div>
+        <div class="stat-row"><span class="stat-label">Committed Rack-Hours ${tip(`For each window: min(required racks, ${r.committedRacks}) × window hours × intra-window utilisation (${(r.config.intraWindowUtilPct*100).toFixed(0)}%). Sum across 4 windows = ${fmt.num(Math.round(r.committedRackHours))}`)}</span><span class="stat-value">${fmt.num(Math.round(r.committedRackHours))}</span></div>
+        <div class="stat-row"><span class="stat-label">Burst Rack-Hours ${tip(`For each window: max(0, required racks − ${r.committedRacks}) × window hours × intra-window utilisation (${(r.config.intraWindowUtilPct*100).toFixed(0)}%). Total burst rack-hours = ${fmt.num(Math.round(r.burstRackHours))} (${fmt.pct(r.burstHoursShare*100)} of total).`)}</span><span class="stat-value ${r.burstHoursShare > 0.15 ? 'warning' : ''}">${fmt.num(Math.round(r.burstRackHours))}</span></div>
+        <div class="stat-row"><span class="stat-label">Total Rack-Hours/mo ${tip(`Committed Rack-Hours (${fmt.num(Math.round(r.committedRackHours))}) + Burst Rack-Hours (${fmt.num(Math.round(r.burstRackHours))}) = ${fmt.num(Math.round(r.totalRackHours))}`)}</span><span class="stat-value highlight">${fmt.num(Math.round(r.totalRackHours))}</span></div>
         <hr class="stat-divider">
         <div class="stat-row"><span class="stat-label">Committed Cost ${tip(`${fmt.num(Math.round(r.committedRackHours))} rack-hrs × ${fmt.usd2(r.committedRate)}/hr = ${fmt.usd(r.committedComputeCost)}`)}</span><span class="stat-value">${fmt.usd(r.committedComputeCost)}</span></div>
         <div class="stat-row"><span class="stat-label">Burst Cost ${tip(`${fmt.num(Math.round(r.burstRackHours))} rack-hrs × ${fmt.usd2(r.burstRate)}/hr = ${fmt.usd(r.burstComputeCost)} (${fmt.pct(r.burstCostShare*100)} of compute)`)}</span><span class="stat-value ${r.burstCostShare > 0.15 ? 'warning' : ''}">${fmt.usd(r.burstComputeCost)}</span></div>
@@ -691,8 +670,9 @@ function renderScenarios() {
         <div class="stat-row"><span class="stat-label">Burst Share (cost)</span><span class="stat-value ${data.burstCostShare > 0.15 ? 'warning' : ''}">${fmt.pct(data.burstCostShare * 100)}</span></div>
         <hr class="stat-divider">
         <div class="stat-row"><span class="stat-label">Avg Usage</span><span class="stat-value">${fmt.pct(data.config.avgUsagePct * 100)}</span></div>
-        <div class="stat-row"><span class="stat-label">Peak Concurrency</span><span class="stat-value">${fmt.pct(data.config.peakConcurrencyPct * 100)}</span></div>
-        <div class="stat-row"><span class="stat-label">Users/GPU (MIG)</span><span class="stat-value">${data.usersPerGpu}</span></div>
+        <div class="stat-row"><span class="stat-label">Weekend Share</span><span class="stat-value">${fmt.pct(data.config.weekendSharePct * 100)}</span></div>
+        <div class="stat-row"><span class="stat-label">Peak/Avg Factor</span><span class="stat-value">${data.config.windowPeakOverAvgFactor.toFixed(1)}×</span></div>
+        <div class="stat-row"><span class="stat-label">Users/GPU (MIG)</span><span class="stat-value">${fmt.num1(data.usersPerGpu)}</span></div>
         <div class="stat-row"><span class="stat-label">Scaling Risk</span><span class="stat-value"><span class="risk-badge risk-${data.scalingRisk.toLowerCase()}">${data.scalingRisk}</span></span></div>
       </div>
     `;
@@ -700,9 +680,9 @@ function renderScenarios() {
 
   document.getElementById('scenarios-content').innerHTML = `
     <div class="scenario-grid">
-      ${scenarioCard('Optimistic', 'Low usage, good contracts, MIG slicing at 3:1', s.optimistic, 'optimistic')}
+      ${scenarioCard('Optimistic', 'Lower usage, smoother demand shape, stronger contracts', s.optimistic, 'optimistic')}
       ${scenarioCard('Expected', 'Current configuration values', s.expected, 'expected')}
-      ${scenarioCard('Pessimistic', 'High usage, high concurrency, no slicing', s.pessimistic, 'pessimistic')}
+      ${scenarioCard('Pessimistic', 'Higher usage, sharper peaks, thinner commitment', s.pessimistic, 'pessimistic')}
     </div>
     
     <div class="card card-full" style="margin-top:20px">
@@ -711,9 +691,10 @@ function renderScenarios() {
         <thead><tr><th>Parameter</th><th>Optimistic</th><th>Expected</th><th>Pessimistic</th></tr></thead>
         <tbody>
           <tr><td>Avg Usage %</td><td>${(s.optimistic.config.avgUsagePct * 100).toFixed(0)}%</td><td>${(s.expected.config.avgUsagePct * 100).toFixed(0)}%</td><td>${(s.pessimistic.config.avgUsagePct * 100).toFixed(0)}%</td></tr>
-          <tr><td>Peak Concurrency</td><td>${(s.optimistic.config.peakConcurrencyPct * 100).toFixed(0)}%</td><td>${(s.expected.config.peakConcurrencyPct * 100).toFixed(0)}%</td><td>${(s.pessimistic.config.peakConcurrencyPct * 100).toFixed(0)}%</td></tr>
-          <tr><td>Off-Peak Concurrency</td><td>${(s.optimistic.config.offpeakConcurrencyPct * 100).toFixed(0)}%</td><td>${(s.expected.config.offpeakConcurrencyPct * 100).toFixed(0)}%</td><td>${(s.pessimistic.config.offpeakConcurrencyPct * 100).toFixed(0)}%</td></tr>
-          <tr><td>Weekend Multiplier</td><td>${s.optimistic.config.weekendMultiplier}×</td><td>${s.expected.config.weekendMultiplier}×</td><td>${s.pessimistic.config.weekendMultiplier}×</td></tr>
+          <tr><td>Weekend Share</td><td>${(s.optimistic.config.weekendSharePct * 100).toFixed(0)}%</td><td>${(s.expected.config.weekendSharePct * 100).toFixed(0)}%</td><td>${(s.pessimistic.config.weekendSharePct * 100).toFixed(0)}%</td></tr>
+          <tr><td>Weekday Peak Intensity</td><td>${s.optimistic.config.weekdayPeakIntensity.toFixed(1)}×</td><td>${s.expected.config.weekdayPeakIntensity.toFixed(1)}×</td><td>${s.pessimistic.config.weekdayPeakIntensity.toFixed(1)}×</td></tr>
+          <tr><td>Weekend Peak Intensity</td><td>${s.optimistic.config.weekendPeakIntensity.toFixed(1)}×</td><td>${s.expected.config.weekendPeakIntensity.toFixed(1)}×</td><td>${s.pessimistic.config.weekendPeakIntensity.toFixed(1)}×</td></tr>
+          <tr><td>Window Peak Over Avg</td><td>${s.optimistic.config.windowPeakOverAvgFactor.toFixed(1)}×</td><td>${s.expected.config.windowPeakOverAvgFactor.toFixed(1)}×</td><td>${s.pessimistic.config.windowPeakOverAvgFactor.toFixed(1)}×</td></tr>
           <tr><td>Contract Discount</td><td>${(s.optimistic.config.contractDiscount * 100).toFixed(0)}%</td><td>${(s.expected.config.contractDiscount * 100).toFixed(0)}%</td><td>${(s.pessimistic.config.contractDiscount * 100).toFixed(0)}%</td></tr>
           <tr><td>Idle Discount</td><td>${(s.optimistic.config.idleDiscount * 100).toFixed(0)}%</td><td>${(s.expected.config.idleDiscount * 100).toFixed(0)}%</td><td>${(s.pessimistic.config.idleDiscount * 100).toFixed(0)}%</td></tr>
           <tr><td>Burst Multiplier</td><td>${s.optimistic.config.burstMultiplier.toFixed(2)}×</td><td>${s.expected.config.burstMultiplier.toFixed(2)}×</td><td>${s.pessimistic.config.burstMultiplier.toFixed(2)}×</td></tr>
@@ -852,15 +833,15 @@ function renderCharts() {
     });
   }
 
-  // 2. Margin vs Concurrency
+  // 2. Margin vs Peak Factor
   destroyChart('margin-concurrency');
-  const marginData = Engine.sensitivityMarginVsConcurrency(cfg);
+  const marginData = Engine.sensitivityMarginVsPeakFactor(cfg);
   const ctx2 = document.getElementById('chart-margin-concurrency');
   if (ctx2) {
     chartInstances['margin-concurrency'] = new Chart(ctx2, {
       type: 'bar',
       data: {
-        labels: marginData.map(d => d.concurrency + '%'),
+        labels: marginData.map(d => d.peakFactor.toFixed(1) + 'x'),
         datasets: [{
           label: 'Gross Margin (%)',
           data: marginData.map(d => d.margin),
@@ -872,7 +853,7 @@ function renderCharts() {
         ...chartDefaults,
         scales: {
           ...chartDefaults.scales,
-          x: { ...chartDefaults.scales.x, title: { display: true, text: 'Peak Concurrency %', color: '#64748b' } },
+          x: { ...chartDefaults.scales.x, title: { display: true, text: 'Window Peak / Avg Factor', color: '#64748b' } },
           y: { ...chartDefaults.scales.y, title: { display: true, text: 'Gross Margin %', color: '#64748b' } },
         },
       },
@@ -924,42 +905,47 @@ function renderCharts() {
     });
   }
 
-  // 4. Scale Projection
+  // 4. Burst Share vs Coverage
   destroyChart('scale-projection');
-  const scaleData = Engine.sensitivityScaleProjection(cfg);
+  const scaleData = Engine.sensitivityBurstVsCoverage(cfg);
   const ctx4 = document.getElementById('chart-scale-projection');
   if (ctx4) {
     chartInstances['scale-projection'] = new Chart(ctx4, {
       type: 'line',
       data: {
-        labels: scaleData.map(d => d.users),
+        labels: scaleData.map(d => d.coverage + '%'),
         datasets: [
           {
-            label: 'Revenue ($)',
-            data: scaleData.map(d => d.revenue),
-            borderColor: chartColors.blue,
-            backgroundColor: chartColors.blueAlpha,
-            fill: true,
-            tension: 0.3,
-            pointRadius: 2,
-          },
-          {
-            label: 'Total Costs ($)',
-            data: scaleData.map(d => d.costs),
+            label: 'Burst Cost Share (%)',
+            data: scaleData.map(d => d.burstShare),
             borderColor: chartColors.orange,
             backgroundColor: chartColors.orangeAlpha,
             fill: true,
             tension: 0.3,
             pointRadius: 2,
           },
+          {
+            label: 'Monthly Profit ($)',
+            data: scaleData.map(d => d.profit),
+            borderColor: chartColors.emerald,
+            backgroundColor: 'transparent',
+            tension: 0.3,
+            pointRadius: 2,
+            yAxisID: 'y1',
+          },
         ],
       },
       options: {
         ...chartDefaults,
         scales: {
-          ...chartDefaults.scales,
-          x: { ...chartDefaults.scales.x, title: { display: true, text: 'Subscribers', color: '#64748b' } },
-          y: { ...chartDefaults.scales.y, title: { display: true, text: 'USD / month', color: '#64748b' } },
+          x: { ...chartDefaults.scales.x, title: { display: true, text: 'Peak Coverage %', color: '#64748b' } },
+          y: { ...chartDefaults.scales.y, position: 'left', title: { display: true, text: 'Burst Cost Share %', color: '#64748b' } },
+          y1: {
+            ...chartDefaults.scales.y,
+            position: 'right',
+            title: { display: true, text: 'Monthly Profit (USD)', color: '#64748b' },
+            grid: { drawOnChartArea: false },
+          },
         },
       },
     });

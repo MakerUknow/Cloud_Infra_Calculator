@@ -135,29 +135,34 @@
             <div class="input-row">
               <label for="cfg-avg-usage">Avg Usage % of Allowance</label>
               <input type="number" id="cfg-avg-usage" value="50" min="1" max="100" step="1">
-              <span class="input-hint">How much of the cap users actually use — scales metered GPU rack-hours vs a 50% baseline (with a throughput floor)</span>
+              <span class="input-hint">How much of the monthly hours cap users actually consume. This directly sets total delivered user-hours, which then drives window demand, concurrency, rack-hours, and compute cost.</span>
             </div>
           </div>
         </div>
 
-        <!-- Concurrency -->
+        <!-- Demand Shape -->
         <div class="config-section">
-          <h3 class="section-title">👥 Concurrency Model</h3>
+          <h3 class="section-title">👥 Demand Shape</h3>
           <div class="input-group">
             <div class="input-row">
-              <label for="cfg-peak-pct">Peak Concurrency %</label>
-              <input type="number" id="cfg-peak-pct" value="25" min="1" max="100" step="1">
-              <span class="input-hint">% of subscribers online during peak weekday evening</span>
+              <label for="cfg-weekend-share">Weekend Share of Monthly Playtime %</label>
+              <input type="number" id="cfg-weekend-share" value="40" min="5" max="95" step="1">
+              <span class="input-hint">Share of total monthly user-hours expected to occur across Saturday and Sunday.</span>
             </div>
             <div class="input-row">
-              <label for="cfg-offpeak-pct">Off-Peak Concurrency %</label>
-              <input type="number" id="cfg-offpeak-pct" value="8" min="0" max="100" step="1">
-              <span class="input-hint">% of subscribers online during quiet hours</span>
+              <label for="cfg-weekday-peak-intensity">Weekday Peak Intensity (× Off-Peak)</label>
+              <input type="number" id="cfg-weekday-peak-intensity" value="3.0" min="1" max="8" step="0.1">
+              <span class="input-hint">How concentrated weekday playtime is inside the weekday peak window relative to weekday off-peak hours.</span>
             </div>
             <div class="input-row">
-              <label for="cfg-weekend-mult">Weekend Peak Multiplier</label>
-              <input type="number" id="cfg-weekend-mult" value="1.3" min="1" max="3" step="0.1">
-              <span class="input-hint">Peak concurrency multiplied by this on weekends</span>
+              <label for="cfg-weekend-peak-intensity">Weekend Peak Intensity (× Off-Peak)</label>
+              <input type="number" id="cfg-weekend-peak-intensity" value="3.8" min="1" max="10" step="0.1">
+              <span class="input-hint">How concentrated weekend playtime is inside the weekend peak window relative to weekend off-peak hours.</span>
+            </div>
+            <div class="input-row">
+              <label for="cfg-window-peak-factor">Window Peak Over Average Concurrency (×)</label>
+              <input type="number" id="cfg-window-peak-factor" value="2.0" min="1" max="5" step="0.1">
+              <span class="input-hint">Multiplier used to convert average concurrent users within a window into the peak concurrent users that must be provisioned.</span>
             </div>
           </div>
         </div>
@@ -324,7 +329,7 @@
           <div class="chart-container-lg"><canvas id="chart-profit-users"></canvas></div>
         </div>
         <div class="card chart-card">
-          <h3 class="card-title">Margin Sensitivity to Concurrency</h3>
+          <h3 class="card-title">Margin Sensitivity to Peak Factor</h3>
           <div class="chart-container-lg"><canvas id="chart-margin-concurrency"></canvas></div>
         </div>
         <div class="card chart-card">
@@ -332,7 +337,7 @@
           <div class="chart-container-lg"><canvas id="chart-cost-slicing"></canvas></div>
         </div>
         <div class="card chart-card">
-          <h3 class="card-title">Revenue vs Costs — Scale Projection</h3>
+          <h3 class="card-title">Burst Share vs Coverage</h3>
           <div class="chart-container-lg"><canvas id="chart-scale-projection"></canvas></div>
         </div>
       </div>
